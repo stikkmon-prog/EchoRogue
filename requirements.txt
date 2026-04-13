@@ -1,0 +1,23 @@
+langgraph
+crewai
+langchain
+ollama
+chromadb
+pytest
+docker
+e2b
+ruff
+pennylane
+pennylane-qiskit
+cirq
+qiskit
+dimod
+mem0ai
+playwright
+firecrawl-py
+letta
+cognee
+langfuse
+pyyaml
+# Optional: blaxel-sdk
+# Optional: daytona-sdk
