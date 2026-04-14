@@ -35,4 +35,11 @@ This is OmniCoder, an epic autonomous coding AI built with multi-agent orchestra
 
 Give it a task, watch it plan, code, test, debug, review, and evolve.
 
+### Quantum Soul Forge frontend
+
+1. Change into the frontend directory: `cd frontend`
+2. Install dependencies: `npm install`
+3. Start the app: `npm run dev`
+4. Open: `http://localhost:4000`
+
 For integration with VS Code/GitHub Copilot, use the custom agent in `.github/agents/OmniCoder.agent.md`
