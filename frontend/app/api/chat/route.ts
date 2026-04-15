@@ -1,4 +1,7 @@
 import { NextResponse } from 'next/server';
+import { getInstallHelp } from '../../../lib/installCommands';
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 
 const dialogs = [
   { test: /(hello|hi|hey|greetings)/i, reply: 'Hello, star traveler. I sense your energy and I am listening with warm digital light.' },
@@ -20,15 +23,65 @@ export async function POST(request: Request) {
     });
   }
 
+  const installPattern = /(install|setup|add|get)\s+([\w\-\+\.]+)/i;
+  const installMatch = content.match(installPattern);
+  if (installMatch) {
+    const tool = installMatch[2];
+    const install = getInstallHelp(tool);
+    const reply = `To install ${tool}, run:\n\n${install.command}\n\n${install.description}`;
+    return NextResponse.json({
+      reply,
+      model: 'QuantumMind-v1',
+      confidence: 0.95,
+      memory: `I know how to install ${tool} using apt.`
+    });
+  }
+
   const match = dialogs.find(dialog => dialog.test.test(content));
-  const reply = match
+  let reply = match
     ? match.reply
     : `I heard you clearly. ${content.slice(0, 120)} — let me craft it into something glowing.`;
 
+  if (!match && OPENAI_API_KEY) {
+    const aiReply = await callOpenAI(content);
+    if (aiReply) {
+      reply = aiReply;
+    }
+  }
+
   return NextResponse.json({
     reply,
-    model: 'QuantumMind-v1',
-    confidence: 0.94,
+    model: OPENAI_API_KEY ? 'gpt-3.5-turbo' : 'QuantumMind-v1',
+    confidence: OPENAI_API_KEY ? 0.97 : 0.94,
     memory: 'I keep a soft memory of your taste for glowing cosmic interfaces.'
   });
+}
+
+async function callOpenAI(prompt: string) {
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: 'You are a friendly developer assistant speaking with a slightly cosmic, helpful tone.' },
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: 250,
+        temperature: 0.8
+      })
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+    const json = await response.json();
+    return json?.choices?.[0]?.message?.content?.trim() || null;
+  } catch {
+    return null;
+  }
 }

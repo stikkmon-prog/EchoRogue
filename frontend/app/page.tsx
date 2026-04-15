@@ -1,10 +1,21 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { Mic, Moon, Power, Send, Sparkles, Sun, Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { cn } from '../lib/utils';
+
+const AgentTools = dynamic(() => import('../components/agent-tools').then(mod => mod.AgentTools), {
+  ssr: false,
+  loading: () => <div className="rounded-3xl border border-white/10 bg-[#070914]/80 p-8 text-center text-slate-400">Loading tools…</div>
+});
+
+const ParticlesCanvas = dynamic(() => import('../components/particles-canvas').then(mod => mod.ParticlesCanvas), {
+  ssr: false,
+  loading: () => null
+});
 
 const initialSkills = [
   { id: '01', name: 'Soul Sketch', description: 'Generate a playful skill manifest.', active: false },
@@ -41,83 +52,6 @@ type ChatMessage = {
   text: string;
 };
 
-function ParticlesCanvas() {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const context = canvas.getContext('2d');
-    if (!context) return;
-
-    let width = canvas.clientWidth;
-    let height = canvas.clientHeight;
-    const ratio = window.devicePixelRatio || 1;
-    canvas.width = width * ratio;
-    canvas.height = height * ratio;
-    context.setTransform(ratio, 0, 0, ratio, 0, 0);
-
-    const stars = Array.from({ length: 80 }, () => ({
-      x: Math.random() * width,
-      y: Math.random() * height,
-      r: 0.4 + Math.random() * 1.1,
-      alpha: 0.12 + Math.random() * 0.28,
-      vx: (Math.random() - 0.5) * 0.15,
-      vy: 0.06 + Math.random() * 0.12
-    }));
-
-    const resize = () => {
-      width = canvas.clientWidth;
-      height = canvas.clientHeight;
-      canvas.width = width * ratio;
-      canvas.height = height * ratio;
-      context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    };
-
-    window.addEventListener('resize', resize);
-    let frame = 0;
-    let animationFrame: number;
-
-    const draw = () => {
-      context.clearRect(0, 0, width, height);
-      stars.forEach(star => {
-        star.x += star.vx;
-        star.y += star.vy;
-        if (star.x < 0) star.x = width;
-        if (star.x > width) star.x = 0;
-        if (star.y > height) star.y = 0;
-
-        context.beginPath();
-        context.arc(star.x, star.y, star.r, 0, Math.PI * 2);
-        context.fillStyle = `rgba(148, 163, 184, ${star.alpha})`;
-        context.fill();
-      });
-
-      context.save();
-      context.globalCompositeOperation = 'lighter';
-      context.strokeStyle = 'rgba(56, 189, 248, 0.08)';
-      context.lineWidth = 1.5;
-      context.beginPath();
-      const centerX = width * 0.3;
-      const centerY = height * 0.25;
-      const pulse = 6 + Math.sin(frame * 0.01) * 4;
-      context.arc(centerX, centerY, 110 + pulse, 0, Math.PI * 2);
-      context.stroke();
-      context.restore();
-
-      frame += 1;
-      animationFrame = requestAnimationFrame(draw);
-    };
-
-    draw();
-    return () => {
-      cancelAnimationFrame(animationFrame);
-      window.removeEventListener('resize', resize);
-    };
-  }, []);
-
-  return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />;
-}
 
 export default function HomePage() {
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -314,17 +248,27 @@ export default function HomePage() {
       <div className="absolute inset-0 bg-cosmic opacity-70 pointer-events-none" />
       <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_20%_10%,rgba(79,70,229,0.18),transparent_24%),radial-gradient(circle_at_80%_15%,rgba(20,184,166,0.16),transparent_22%),radial-gradient(circle_at_50%_90%,rgba(168,85,247,0.18),transparent_25)]" />
       <div className="relative mx-auto flex min-h-screen w-full max-w-[1700px] flex-col px-4 py-4 sm:px-6 lg:px-8">
-        <header className="relative z-10 flex items-center justify-between gap-4 rounded-3xl border border-white/10 bg-white/5 px-4 py-4 shadow-2xl shadow-cyan-500/5 backdrop-blur-xl sm:px-6">
-          <div className="flex items-center gap-3">
-            <div className="grid h-12 w-12 place-items-center rounded-3xl bg-gradient-to-br from-violet-500 via-fuchsia-500 to-cyan-400 text-black shadow-glow">
-              <Wand2 className="h-6 w-6" />
+        <header className="relative z-10 flex flex-col gap-6 rounded-3xl border border-white/10 bg-white/5 px-5 py-6 shadow-glow backdrop-blur-xl sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+          <div className="max-w-3xl">
+            <div className="flex items-center gap-3">
+              <div className="grid h-12 w-12 place-items-center rounded-3xl bg-gradient-to-br from-violet-500 via-fuchsia-500 to-cyan-400 text-black shadow-glow">
+                <Wand2 className="h-6 w-6" />
+              </div>
+              <div>
+                <p className="text-sm uppercase tracking-[0.28em] text-cyan-200/80">Quantum Soul Forge</p>
+                <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">Cosmic AI companion for code, data, and creative flow.</h1>
+              </div>
             </div>
-            <div>
-              <p className="text-sm uppercase tracking-[0.28em] text-cyan-200/80">Quantum Soul Forge</p>
-              <h1 className="text-2xl font-semibold tracking-tight text-white">Cosmic AI Companion</h1>
+            <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300 sm:text-base">
+              Navigate datasets, browse content, and activate powerful tools in a sleek, responsive workspace designed for fast, magical interactions.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <span className="rounded-full bg-cyan-400/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-cyan-200">Fast</span>
+              <span className="rounded-full bg-violet-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-violet-200">Intuitive</span>
+              <span className="rounded-full bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-slate-200">Built for exploration</span>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-3">
             <Button variant="secondary" className="gap-2 px-4 py-3 text-sm" onClick={() => setThemeMode(themeMode === 'violet' ? 'midnight' : 'violet')}>
               {themeMode === 'violet' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
               {themeMode === 'violet' ? 'Night Glow' : 'Aurora'}
@@ -346,7 +290,7 @@ export default function HomePage() {
         </header>
 
         <div className="relative z-10 mt-6 grid flex-1 gap-6 xl:grid-cols-[320px_minmax(1fr,900px)_320px]">
-          <aside className={cn('rounded-3xl border border-white/10 bg-white/5 p-5 shadow-glow transition-all duration-300', showSkills ? 'opacity-100' : 'hidden xl:block')}>
+          <aside className={cn('glass-card transition-all duration-300', showSkills ? 'opacity-100' : 'hidden xl:block')}>
             <div className="mb-5 flex items-center justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.35em] text-slate-400">Skills Vault</p>
@@ -368,7 +312,7 @@ export default function HomePage() {
             </div>
           </aside>
 
-          <section className="relative overflow-hidden rounded-[2.5rem] border border-white/10 bg-[#090a14]/80 p-5 shadow-2xl shadow-cyan-500/5 backdrop-blur-xl sm:p-6">
+          <section className="relative overflow-hidden rounded-[2.5rem] glass-panel p-5 sm:p-6">
             <ParticlesCanvas />
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(79,70,229,0.16),transparent_26%),radial-gradient(circle_at_bottom_right,rgba(20,184,166,0.12),transparent_28%)]" />
             <div className="relative flex min-h-[76vh] flex-col gap-6">
@@ -496,9 +440,13 @@ export default function HomePage() {
                 </div>
               </div>
             )}
+
+            <div className="mt-10">
+              <AgentTools />
+            </div>
           </section>
 
-          <aside className={cn('rounded-3xl border border-white/10 bg-white/5 p-5 shadow-glow transition-all duration-300', showStatus ? 'opacity-100' : 'hidden xl:block')}>
+          <aside className={cn('glass-card transition-all duration-300', showStatus ? 'opacity-100' : 'hidden xl:block')}>
             <div className="mb-5 flex items-center justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.28em] text-slate-400">Quantum Status</p>
