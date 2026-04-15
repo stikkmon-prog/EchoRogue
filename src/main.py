@@ -3,18 +3,24 @@ import os
 from datetime import datetime
 
 from crewai import Crew, Agent, Task
-from langchain.tools import Tool
-from langchain.llms import OpenAI, Anthropic
+from crewai.llms.base_llm import BaseLLM
+from crewai.tools import tool
 import chromadb
 import ollama
 import pennylane as qml
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 from qiskit import QuantumCircuit
 from mem0 import Memory
 import asyncio
 from playwright.async_api import async_playwright
 from firecrawl import FirecrawlApp
-from letta import create_client
+try:
+    from letta import create_client
+except ImportError:
+    create_client = None
 import cognee
 from langfuse import Langfuse
 import yaml
@@ -23,17 +29,34 @@ import yaml
 with open('/workspaces/EchoRogue/SOUL.md', 'r') as f:
     SOUL = f.read()
 
-# Initialize memory
-client = chromadb.Client()
-collection = client.create_collection("agent_memory")
-memory = Memory()
-letta_client = create_client()
-cognee.init()
-langfuse = Langfuse()  # For observability
+client = None
+collection = None
+memory = None
+letta_client = None
+langfuse = None
+_cognee_initialized = False
 
 SKILLS_DIR = "/workspaces/EchoRogue/skills_vault"
 os.makedirs(SKILLS_DIR, exist_ok=True)
 current_user_id = "anonymous"
+
+
+def initialize_services():
+    global client, collection, memory, letta_client, langfuse, _cognee_initialized
+    if client is not None:
+        return
+
+    client = chromadb.Client()
+    collection = client.create_collection("agent_memory")
+    memory = Memory()
+    if create_client is not None:
+        letta_client = create_client()
+    else:
+        letta_client = None
+    if not _cognee_initialized:
+        cognee.init()
+        _cognee_initialized = True
+    langfuse = Langfuse()  # For observability
 
 # Quantum setup
 dev = qml.device("default.qubit", wires=4)  # Simulator
@@ -46,37 +69,215 @@ def quantum_circuit(params):
     return qml.expval(qml.PauliZ(0))
 
 # Quantum layer for optimization
-class QuantumLayer(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.params = torch.nn.Parameter(torch.randn(2))
+if torch is not None:
+    class QuantumLayer(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.params = torch.nn.Parameter(torch.randn(2))
 
-    def forward(self, x):
-        result = quantum_circuit(self.params)
-        return x + result  # Placeholder integration
+        def forward(self, x):
+            result = quantum_circuit(self.params)
+            return x + result  # Placeholder integration
+else:
+    class QuantumLayer:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("Torch is required for QuantumLayer support.")
+
+
+def _normalize_messages(messages):
+    if isinstance(messages, str):
+        return [{"role": "user", "content": messages}]
+    if isinstance(messages, dict):
+        return [{
+            "role": messages.get("role", "user"),
+            "content": messages.get("content", ""),
+        }]
+    if isinstance(messages, (list, tuple)):
+        normalized = []
+        for message in messages:
+            if isinstance(message, str):
+                normalized.append({"role": "user", "content": message})
+            elif isinstance(message, dict):
+                normalized.append({
+                    "role": message.get("role", "user"),
+                    "content": message.get("content", ""),
+                })
+            else:
+                raise ValueError(
+                    f"Unsupported message type: {type(message).__name__}. "
+                    "Expected string, dict, or list of dicts."
+                )
+        return normalized
+    raise ValueError(
+        "Unsupported messages payload. Provide a string, a message dict, or a list of message dicts."
+    )
+
+
+def _flatten_messages(messages):
+    normalized = _normalize_messages(messages)
+    parts = []
+    for message in normalized:
+        role = message.get("role", "user")
+        content = message.get("content", "")
+        parts.append(f"{role.capitalize()}: {content}")
+    return "\n".join(parts).strip()
+
+
+class OllamaLLM(BaseLLM):
+    llm_type: str = "ollama"
+    provider: str = "ollama"
+
+    def call(
+        self,
+        messages,
+        tools=None,
+        callbacks=None,
+        available_functions=None,
+        from_task=None,
+        from_agent=None,
+        response_model=None,
+    ):
+        normalized = _normalize_messages(messages)
+        options = self.additional_params.get("options")
+        try:
+            response = ollama.chat(
+                model=self.model,
+                messages=normalized,
+                options=options,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Ollama model call failed: {exc}") from exc
+
+        if hasattr(response, "message") and response.message is not None:
+            return getattr(response.message, "content", str(response.message))
+        if hasattr(response, "content"):
+            return str(response.content)
+        return str(response)
+
+
+class HuggingFaceHubLLM(BaseLLM):
+    llm_type: str = "huggingface"
+    provider: str = "huggingface"
+    hf_provider: str | None = None
+    api_token: str | None = None
+
+    def __init__(self, **data):
+        if "api_token" not in data:
+            data["api_token"] = (
+                os.environ.get("HUGGINGFACEHUB_API_TOKEN")
+                or os.environ.get("HF_API_TOKEN")
+            )
+        if not data.get("api_token"):
+            raise RuntimeError(
+                "HuggingFace model support requires HUGGINGFACEHUB_API_TOKEN or HF_API_TOKEN."
+            )
+
+        super().__init__(**data)
+
+        try:
+            from huggingface_hub import InferenceClient
+        except ImportError as exc:
+            raise RuntimeError(
+                "huggingface_hub is required for HuggingFace/NVIDIA model support. "
+                "Install it with `pip install huggingface_hub`."
+            ) from exc
+
+        self.client = InferenceClient(
+            model=self.model,
+            provider=self.hf_provider or "hf-inference",
+            api_key=self.api_token,
+        )
+
+    def call(
+        self,
+        messages,
+        tools=None,
+        callbacks=None,
+        available_functions=None,
+        from_task=None,
+        from_agent=None,
+        response_model=None,
+    ):
+        prompt = _flatten_messages(messages)
+        kwargs = {}
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
+        if self.stop:
+            kwargs["stop_sequences"] = self.stop
+
+        response = self.client.text_generation(prompt, **kwargs)
+
+        if isinstance(response, str):
+            return response
+        if hasattr(response, "generated_text"):
+            return response.generated_text
+        if isinstance(response, dict) and "generated_text" in response:
+            return response["generated_text"]
+        if isinstance(response, (list, tuple)):
+            return "".join(str(item) for item in response)
+        return str(response)
+
 
 # Multi-model routing (simplified)
+def load_model(provider=None, model_name=None):
+    provider = (provider or os.environ.get("MODEL_PROVIDER", "ollama")).strip().lower()
+    model_name = model_name or os.environ.get("MODEL_NAME")
+
+    if provider in ("ollama", "ollama.ai"):
+        return OllamaLLM(model=model_name or "llama2")
+    if provider in ("openai", "gpt", "openai_api"):
+        return {"llm_type": "openai", "model": model_name or "gpt-4"}
+    if provider in ("anthropic", "claude"):
+        return {"llm_type": "anthropic", "model": model_name or "claude-3-sonnet-20240229"}
+    if provider in ("huggingface", "huggingfacehub", "hf"):
+        return HuggingFaceHubLLM(
+            model=model_name or "gpt2",
+            hf_provider="hf-inference",
+        )
+    if provider in ("nvidia", "nvidiaai"):
+        if not model_name:
+            raise ValueError(
+                "NVIDIA model provider requires MODEL_NAME to be set for the target model."
+            )
+        return HuggingFaceHubLLM(
+            model=model_name,
+            hf_provider="nvidia",
+        )
+
+    raise ValueError(f"Unsupported model provider: {provider}")
+
+
 def route_model(task_type):
+    task_type = task_type.strip().lower()
+    provider = os.environ.get("MODEL_PROVIDER")
+    model_name = os.environ.get("MODEL_NAME")
+
+    if provider or model_name:
+        return load_model(provider=provider, model_name=model_name)
+
     if "quantum" in task_type:
-        return ollama.Ollama(model="llama2")  # Placeholder for quantum-specialized model
+        return load_model(provider="ollama", model_name="llama2")
     elif "creative" in task_type:
-        return Anthropic(model="claude-3-sonnet-20240229")
+        return load_model(provider="anthropic", model_name="claude-3-sonnet-20240229")
     elif "analytical" in task_type:
-        return OpenAI(model="gpt-4")
+        return load_model(provider="openai", model_name="gpt-4")
     else:
-        return ollama.Ollama(model="llama2")
+        return load_model(provider="ollama", model_name="llama2")
 
 # Tools
 def run_code(code):
+    """Run code in a sandboxed environment."""
     # Placeholder for sandbox execution
     # Use E2B or Docker
     return "Code executed successfully"  # Simulate
 
 def search_docs(query):
+    """Search documentation for the provided query."""
     # Placeholder for browser/search
     return f"Docs for {query}"
 
 def run_quantum_circuit(circuit_code):
+    """Run a quantum circuit snippet and return execution summary."""
     qc = QuantumCircuit(2)
     qc.h(0)
     qc.cx(0, 1)
@@ -91,36 +292,50 @@ async def browse_web(url):
         await browser.close()
         return content[:1000]  # Truncate
 
+
+def browse_web_tool(url):
+    """Browse a web page and return the first chunk of HTML."""
+    return asyncio.run(browse_web(url))
+
+
 def scrape_docs(query):
+    """Scrape documentation or web content for a query."""
     app = FirecrawlApp(api_key="your_key")  # Placeholder
     return app.search(query)
 
 def user_memory_search(query):
+    """Search user memory using Mem0 and Letta."""
+    initialize_services()
     results = memory.search(query, user_id=current_user_id)
-    letta_results = letta_client.get_messages()  # Placeholder
+    if letta_client is not None:
+        letta_results = letta_client.get_messages()  # Placeholder
+    else:
+        letta_results = ""
     return str(results) + str(letta_results)
 
 def graph_rag_search(query):
-    # Placeholder for cognee graph search
+    """Run a graph-based RAG search using Cognee."""
     return cognee.search(query)
 
 def mcp_github_tool(action):
-    # Placeholder for MCP GitHub
+    """Execute a GitHub/MCP action placeholder."""
     return f"GitHub {action} executed"
 
 def run_in_blaxel(code):
-    # Placeholder for Blaxel perpetual sandbox execution
+    """Execute code in Blaxel sandbox placeholder."""
     return f"Blaxel run: {code[:100]}"
 
 def run_in_daytona(code):
-    # Placeholder for Daytona fast cold-start execution
+    """Execute code in Daytona sandbox placeholder."""
     return f"Daytona run: {code[:100]}"
 
 def advanced_sandbox_run(code):
-    # Placeholder for Blaxel/Daytona advanced sandbox execution
+    """Execute code in an advanced sandbox placeholder."""
     return f"Advanced sandbox run: {code[:100]}"
 
 def create_skill_definition(prompt):
+    """Create and persist a reusable skill definition in the skill vault."""
+    initialize_services()
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     skill_name = f"skill_{timestamp}"
     skill_def = {
@@ -152,6 +367,7 @@ def list_skills(_=None):
     return [f for f in os.listdir(SKILLS_DIR) if f.endswith(".skill.yaml")]
 
 def execute_skill(payload):
+    """Execute a saved skill payload, or return an error if the skill is missing."""
     if isinstance(payload, dict):
         skill_name = payload.get("name")
         params = payload.get("params", {})
@@ -163,19 +379,19 @@ def execute_skill(payload):
         return f"Skill '{skill_name}' not found"
     return f"Executing skill {skill_name} with params {params} (placeholder)"
 
-code_tool = Tool(name="CodeRunner", func=run_code, description="Run code in sandbox")
-search_tool = Tool(name="DocSearch", func=search_docs, description="Search documentation")
-quantum_tool = Tool(name="QuantumRunner", func=run_quantum_circuit, description="Run quantum circuits")
-browser_tool = Tool(name="WebBrowser", func=lambda url: asyncio.run(browse_web(url)), description="Browse web pages")
-scrape_tool = Tool(name="WebScraper", func=scrape_docs, description="Scrape web content")
-memory_tool = Tool(name="UserMemory", func=user_memory_search, description="Search user preferences with Letta")
-graph_tool = Tool(name="GraphRAG", func=graph_rag_search, description="Graph-based RAG search")
-mcp_tool = Tool(name="MCPGitHub", func=mcp_github_tool, description="MCP GitHub operations")
-sandbox_tool = Tool(name="AdvancedSandbox", func=advanced_sandbox_run, description="Run in advanced sandbox")
-blaxel_tool = Tool(name="BlaxelRunner", func=run_in_blaxel, description="Execute code in Blaxel sandbox")
-daytona_tool = Tool(name="DaytonaRunner", func=run_in_daytona, description="Execute code in Daytona sandbox")
-skillsmith_tool = Tool(name="SkillSmith", func=create_skill_definition, description="Create and persist reusable skills")
-skill_executor = Tool(name="SkillExecutor", func=execute_skill, description="Execute a saved skill")
+code_tool = tool("CodeRunner")(run_code)
+search_tool = tool("DocSearch")(search_docs)
+quantum_tool = tool("QuantumRunner")(run_quantum_circuit)
+browser_tool = tool("WebBrowser")(browse_web_tool)
+scrape_tool = tool("WebScraper")(scrape_docs)
+memory_tool = tool("UserMemory")(user_memory_search)
+graph_tool = tool("GraphRAG")(graph_rag_search)
+mcp_tool = tool("MCPGitHub")(mcp_github_tool)
+sandbox_tool = tool("AdvancedSandbox")(advanced_sandbox_run)
+blaxel_tool = tool("BlaxelRunner")(run_in_blaxel)
+daytona_tool = tool("DaytonaRunner")(run_in_daytona)
+skillsmith_tool = tool("SkillSmith")(create_skill_definition)
+skill_executor = tool("SkillExecutor")(execute_skill)
 
 # Agents
 planner = Agent(

@@ -18,7 +18,9 @@ This is OmniCoder, an epic autonomous coding AI built with multi-agent orchestra
 
 1. Install dependencies: `pip install -r requirements.txt`
 2. Set API keys for models (OpenAI, Anthropic, etc.)
-3. Run: `python src/main.py`
+3. Optionally set `MODEL_PROVIDER` and `MODEL_NAME` to select a custom model source such as Ollama, HuggingFace, NVIDIA, OpenAI, or Anthropic.
+4. For HuggingFace/NVIDIA remote inference, also set `HUGGINGFACEHUB_API_TOKEN` or `HF_API_TOKEN`.
+5. Run: `python src/main.py`
 
 ### Frontend
 
@@ -32,7 +34,7 @@ This release includes a built-in Linux terminal panel, file upload and dataset i
 ## Architecture
 
 - **Frameworks**: LangGraph + CrewAI hybrid
-- **Models**: Dynamic routing with auto-upgrades to frontier models
+- **Models**: Dynamic routing with auto-upgrades to frontier models; can be configured for providers such as OpenAI, Anthropic, Ollama, HuggingFace, NVIDIA, and others
 - **Quantum**: PennyLane + Qiskit for QML layers and circuits
 - **Memory**: ChromaDB vector store, Mem0/Letta for user adaptation, Cognee for graph connections
 - **Tools**: Playwright for browser, Firecrawl for scraping, quantum simulators, skill vault, MCP ecosystem, advanced sandboxes
